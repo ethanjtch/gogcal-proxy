@@ -110,8 +110,29 @@ export default {
       return new Response(page, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
     }
 
-    // ========== 1. 授权入口：跳转 Google 同意页（一次性授权） ==========
+    // ========== 1. 授权入口（仅按需启用，防公开刷写 KV） ==========
     if (url.pathname === "/__auth") {
+      // 已授权后默认上锁：必须携带门禁凭据才能重新授权，杜绝公开端点被用作 KV 写入放大器
+      const hasRefresh = !!(await KV.get("refresh_token"));
+      if (hasRefresh) {
+        const authHeader = request.headers.get("authorization") || "";
+        const expected = "Basic " + base64Encode(cfg.GATE_USER + ":" + cfg.GATE_PASS);
+        if (!safeEqual(authHeader, expected)) {
+          return new Response("此实例已完成授权。如需重新授权，请携带门禁凭据访问本入口（浏览器会弹出登录框）。", {
+            status: 403,
+            headers: { "WWW-Authenticate": 'Basic realm="gogcal"', "content-type": "text/plain; charset=utf-8" },
+          });
+        }
+      }
+      // 简易限速（Cache API，不消耗 KV 配额）：同一 IP 60 秒内最多 20 次进入授权流程
+      const ip = request.headers.get("cf-connecting-ip") || "unknown";
+      const cacheKey = new Request("https://" + url.host + "/__rl/" + ip);
+      const cached = await caches.default.match(cacheKey);
+      const count = cached ? Number(await cached.text()) || 0 : 0;
+      if (count >= 20) {
+        return new Response("请求过于频繁，请稍后再试。", { status: 429 });
+      }
+      await caches.default.put(cacheKey, new Response(String(count + 1), { headers: { "Cache-Control": "max-age=60" } }));
       const state = crypto.randomUUID();
       await KV.put("oauth_state", state); // 防 CSRF：回调时校验
       const params = new URLSearchParams({

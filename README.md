@@ -120,6 +120,7 @@ npm run deploy
 - KV 中只保存 OAuth 令牌，不保存任何日历内容；`/__status`、授权失败提示均不泄露令牌。
 - Google OAuth 客户端请使用最小 scope，并妥善保管 Client Secret（泄漏后在 Google Cloud 重置即可，无需改动本仓库）。
 - 长期未使用（约 6 个月）后 refresh token 可能失效，重新访问 `/__auth` 即可恢复。
+- 授权入口 `/__auth` 在已完成授权后默认上锁：无凭据访问直接 403，不产生任何 KV 写入；需要重新授权时，浏览器访问 `/__auth` 会弹出门禁登录框，输入 `GATE_USER` / `GATE_PASS` 即可继续。
 
 ## 排查命令
 
