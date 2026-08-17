@@ -163,6 +163,22 @@ curl -s 'https://<你的域名>/__status' -u 'GATE_USER:GATE_PASS'
 
 > 💰 **费用提示**：KV 在 Cloudflare 免费套餐中配有免费读写额度，个人日历同步用量（请求频率低、体积小）远低于限额；费用风险主要来自服务被公开滥用——所以务必设置强门禁口令。
 
+## 可选功能：订阅日历转发（Google 托管的公开 ICS）
+
+**适用场景**：你在 Google 日历网页端「按 URL 添加」的订阅日历（如 Berkeley 课程日历 `cs189-instructors@berkeley.edu`），**不会**出现在 CalDAV 账户同步中（Google CalDAV 只暴露自有/共享日历）；而苹果端直接用官方 ICS 地址订阅时，若本地网络访问 `calendar.google.com` 受限也会失败。
+
+本 Worker 提供 `/subscribe` 端点：在 **Cloudflare 边缘**抓取目标公开 ICS，再返回给苹果端「订阅日历」功能，绕开本地网络限制。**零配置、零注册**——去新增订阅日历，地址直接填：
+
+```
+https://<你的域名>/subscribe?url=https://calendar.google.com/calendar/ical/cs189-instructors%40berkeley.edu/public/basic.ics
+```
+
+把 `url` 参数换成任意一条 **Google 托管域名**（`google.com` / `googleusercontent.com`）下的公开 ICS 地址即可，无需在 KV 或代码里注册任何东西。
+
+- 为防本端点被当作开放代理滥用，**仅放行 `google.com` / `googleusercontent.com` 域名**；其他域名的 ICS 请直接在苹果端订阅原始地址（不经本代理）。
+- 若原地址中包含 `?` 或 `#`，作为参数值需要先 URL 编码（基本格式的 `basic.ics` 一般没有）。
+- 订阅日历为**只读**；同步间隔由 Apple 控制，也可下拉刷新或重启「日历」App 强制更新。
+
 ## 许可证
 
 [MIT](./LICENSE) © 2026 Ethan Chen

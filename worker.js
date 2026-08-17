@@ -191,6 +191,43 @@ export default {
       }
     }
 
+    // ========== 2.5 订阅日历转发（ICS 代理）：/subscribe?url=<公开ICS> ==========
+    // 用途：Google CalDAV 不暴露「按 URL 添加」的订阅日历，且本地网络直连 calendar.google.com
+    // 可能受限——本端点在 Cloudflare 边缘抓取目标公开 ICS 再返回给 Apple 端「订阅日历」。
+    // 只支持 /subscribe?url=<Google 公开 ICS 地址> 直传（零注册）。白名单仅放行 Google 托管域，
+    // 防止端点被当作开放代理滥用；不要求门禁凭据（Apple 的订阅日历不支持认证）。
+    if (url.pathname === "/subscribe" || url.pathname.startsWith("/subscribe/")) {
+      const direct = url.searchParams.get("url");
+      if (!direct) {
+        return new Response("缺少 url 参数。用法: /subscribe?url=<Google 公开 ICS 地址>", {
+          status: 400,
+          headers: { "content-type": "text/plain; charset=utf-8" },
+        });
+      }
+      let t;
+      try {
+        t = new URL(direct);
+      } catch {
+        return new Response("url 参数不是合法地址", { status: 400, headers: { "content-type": "text/plain; charset=utf-8" } });
+      }
+      const host = t.hostname.toLowerCase();
+      if (t.protocol !== "https:" || !(host === "google.com" || host.endsWith(".google.com") || host.endsWith(".googleusercontent.com"))) {
+        return new Response("仅允许 Google 域名下的公开 ICS 地址", { status: 403, headers: { "content-type": "text/plain; charset=utf-8" } });
+      }
+      try {
+        const r = await fetch(t.href, {
+          headers: { "User-Agent": "Mozilla/5.0 (gogcal-proxy; +https://github.com/ethanjtch/gogcal-proxy)" },
+        });
+        const out = new Headers(r.headers);
+        out.set("content-type", r.headers.get("content-type") || "text/calendar; charset=utf-8");
+        out.set("access-control-allow-origin", "*");
+        out.set("cache-control", "max-age=300");
+        return new Response(r.body, { status: r.status, headers: out });
+      } catch (e) {
+        return new Response("订阅源抓取失败: " + e.message, { status: 502 });
+      }
+    }
+
     // ========== 3. 门禁校验（除 /__auth 与 /__callback 外所有请求） ==========
     const authHeader = request.headers.get("authorization") || "";
     const expected = "Basic " + base64Encode(cfg.GATE_USER + ":" + cfg.GATE_PASS);
