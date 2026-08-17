@@ -72,7 +72,10 @@ npm run deploy
 
 ## 后续配置（无论哪种方式都要做，都是面板「确认」操作）
 
-1. **创建 KV 命名空间**：Cloudflare 面板 → Workers & Pages → KV → 创建命名空间（如 `gogcal-tokens`）→ 记下 **Namespace ID** → 粘贴到 `wrangler.toml` 的两处 `id`。
+1. **创建并绑定 KV 命名空间**：
+   - Cloudflare 面板 → Workers & Pages → KV → 创建命名空间（如 `gogcal-tokens`）。
+   - **方式 B（CLI）用户**：把 **Namespace ID** 粘贴到 `wrangler.toml` 的两处 `id`，然后 `npm run deploy`。
+   - **方式 A（按钮）用户**：打开 Worker → 设置 → 绑定 → 添加 KV 命名空间绑定：绑定名 `TOKENS`，选择刚创建的命名空间 → 保存并重新部署（面板上点「保存并部署」）。
 2. **配置 4 个 Secrets**：Cloudflare 面板 → Workers & Pages → `gogcal-proxy` → 设置 → 变量与 Secrets：
 
    | 变量名 | 值 |
@@ -113,7 +116,7 @@ npm run deploy
 ## 安全说明
 
 - 敏感配置**全部**走 Cloudflare Secrets，仓库内不存任何真实凭据。
-- 门禁口令独立于你的 Google 账号：想换就换，换完在苹果设备更新密码即可，不影响 OAuth 授权。
+- 门禁口令独立于你的 Google 账号：想换就换，换完在苹果设备更新密码即可，不影响 OAuth 授权。支持任意字符（含中文/符号），建议用密码管理器生成 **20+ 位随机密码**。
 - KV 中只保存 OAuth 令牌，不保存任何日历内容；`/__status`、授权失败提示均不泄露令牌。
 - Google OAuth 客户端请使用最小 scope，并妥善保管 Client Secret（泄漏后在 Google Cloud 重置即可，无需改动本仓库）。
 - 长期未使用（约 6 个月）后 refresh token 可能失效，重新访问 `/__auth` 即可恢复。
@@ -134,6 +137,9 @@ curl -s 'https://<你的域名>/__status' -u 'GATE_USER:GATE_PASS'
 | `/__status` 返回 `hasRefreshToken: false` | 未完成授权或令牌过期 | 访问 `/__auth` 重新授权 |
 | PROPFIND 返回 401 且无 multistatus | 同上 或 Secrets 缺失 | 检查 4 个 Secrets 是否都已配置 |
 | `*.workers.dev` 无法访问 | 部分网络环境可达性差异 | 绑定自有自定义域名 |
+| 担心门禁被暴力尝试 | 公开网络上的服务都可能被扫描 | 使用高熵 `GATE_PASS`；必要时在 Cloudflare 面板为该域名配置 Rate Limiting 规则 |
+
+> 💰 **费用提示**：KV 在 Cloudflare 免费套餐中配有免费读写额度，个人日历同步用量（请求频率低、体积小）远低于限额；费用风险主要来自服务被公开滥用——所以务必设置强门禁口令。
 
 ## 许可证
 
