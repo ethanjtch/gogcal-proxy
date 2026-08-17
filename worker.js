@@ -99,13 +99,13 @@ export default {
     if ((url.pathname === "/.well-known/caldav" || url.pathname === "/.well-known/caldav/") && (request.method === "GET" || request.method === "HEAD")) {
       return Response.redirect(url.origin + "/caldav/v2/", 301);
     }
-    // 根路径纯浏览器访问：返回说明页（不代理到 Google，避免 404）
+    // 根路径纯浏览器访问：返回说明页（不代理到 Google，避免 404；不暴露内部端点）
     if (url.pathname === "/" && (request.method === "GET" || request.method === "HEAD")) {
       const page = `<div style="font-family:-apple-system,sans-serif;max-width:38rem;margin:4rem auto;padding:0 1rem;line-height:1.7">
   <h1>Google 日历同步网关 · CalDAV Gateway</h1>
   <p>此服务将 Apple 设备的原生「日历」App 接入 Google 日历（CalDAV + OAuth2）。</p>
-  <p>配置指引见项目文档（GitHub: gogcal-proxy）。诊断为 <code>/__status</code>，一次性授权为 <code>/__auth</code>。</p>
-  <p style="color:#666;font-size:.9em">This endpoint serves CalDAV protocol traffic only; browsers see this page.</p>
+  <p>本实例为个人自建服务。想搭建同款？见开源仓库 <a href="https://github.com/ethanjtch/gogcal-proxy" style="color:#0366d6">github.com/ethanjtch/gogcal-proxy</a>（含一键部署指引）。</p>
+  <p style="color:#666;font-size:.9em">This endpoint serves CalDAV protocol traffic only.</p>
 </div>`;
       return new Response(page, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
     }
