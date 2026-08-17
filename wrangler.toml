@@ -1,0 +1,13 @@
+# gogcal-proxy 开源模板配置
+# 部署前必读 README：需先把下面 KV 命名空间的 ID 替换为你自己的。
+name = "gogcal-proxy"
+main = "worker.js"
+compatibility_date = "2026-08-17"
+
+# KV 命名空间：用于保存 Google OAuth Token。
+# 1) 在 Cloudflare 面板创建 KV 命名空间（例如 gogcal-tokens）
+# 2) 将它的 Namespace ID 填入下面两个 id（preview_id 用于本地开发：wrangler dev）
+[[kv_namespaces]]
+binding = "TOKENS"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"

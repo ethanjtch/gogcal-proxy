@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+
+# Node
+node_modules/
+
+# 环境变量/Secrets（严禁提交）
+.env
+.env.*
+
+# 会话记录/日志
+*.jsonl
+*.log
+
+# 本地 wrangler 缓存
+.wrangler/
+
+# 私有生产配置（含个人 KV 命名空间 ID，勿提交）
+wrangler.prod.toml
