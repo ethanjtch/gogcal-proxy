@@ -118,8 +118,9 @@ export default {
         const authHeader = request.headers.get("authorization") || "";
         const expected = "Basic " + base64Encode(cfg.GATE_USER + ":" + cfg.GATE_PASS);
         if (!safeEqual(authHeader, expected)) {
+          // 用 401 + WWW-Authenticate 触发浏览器 Basic 弹窗（403 不会弹）
           return new Response("此实例已完成授权。如需重新授权，请携带门禁凭据访问本入口（浏览器会弹出登录框）。", {
-            status: 403,
+            status: 401,
             headers: { "WWW-Authenticate": 'Basic realm="gogcal"', "content-type": "text/plain; charset=utf-8" },
           });
         }
