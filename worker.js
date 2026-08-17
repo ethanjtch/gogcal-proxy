@@ -205,14 +205,16 @@ export default {
 
     // ========== 6. 代理到 Google CalDAV（用 Bearer Token） ==========
     let path = url.pathname;
-    if (path === "/" || path === "" || path === "/.well-known/caldav" || path === "/.well-known/caldav/") {
-      path = "/caldav/v2/";
-    } else if (path === "/caldav" || path === "/caldav/") {
-      path = "/caldav/v2/";
+    const CALDAV_V2 = "/caldav/v2";
+    if (path === "/" || path === "" || path === "/.well-known/caldav" || path === "/.well-known/caldav/" ||
+        path === "/caldav" || path === "/caldav/") {
+      path = CALDAV_V2 + "/";
+    } else if (path.startsWith(CALDAV_V2)) {
+      // 已是标准 CalDAV 路径：/caldav/v2 与 /caldav/v2/xxx 原样保留（避免双重拼接）
     } else if (path.startsWith("/caldav/")) {
-      path = "/caldav/v2" + path.slice("/caldav".length); // /caldav/xxx -> /caldav/v2/xxx
-    } else if (!path.startsWith("/caldav/v2")) {
-      path = "/caldav/v2" + path; // 兜底
+      path = CALDAV_V2 + path.slice("/caldav".length); // /caldav/xxx -> /caldav/v2/xxx
+    } else {
+      path = CALDAV_V2 + path; // 兜底
     }
 
     const headers = new Headers(request.headers);
