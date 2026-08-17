@@ -94,8 +94,13 @@ export default {
       );
     }
 
-    // ========== 0.5 根路径浏览器访问：返回说明页（CalDAV 协议请求仍走代理） ==========
-    if ((url.pathname === "/" || url.pathname === "/.well-known/caldav") && (request.method === "GET" || request.method === "HEAD")) {
+    // ========== 0.5 浏览器/发现流程友好处理（CalDAV 协议请求仍走代理） ==========
+    // .well-known 发现：RFC 6764 要求 301 重定向到 CalDAV 资源（Apple 设备依赖此行为）
+    if ((url.pathname === "/.well-known/caldav" || url.pathname === "/.well-known/caldav/") && (request.method === "GET" || request.method === "HEAD")) {
+      return Response.redirect(url.origin + "/caldav/v2/", 301);
+    }
+    // 根路径纯浏览器访问：返回说明页（不代理到 Google，避免 404）
+    if (url.pathname === "/" && (request.method === "GET" || request.method === "HEAD")) {
       const page = `<div style="font-family:-apple-system,sans-serif;max-width:38rem;margin:4rem auto;padding:0 1rem;line-height:1.7">
   <h1>Google 日历同步网关 · CalDAV Gateway</h1>
   <p>此服务将 Apple 设备的原生「日历」App 接入 Google 日历（CalDAV + OAuth2）。</p>
