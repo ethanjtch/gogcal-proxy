@@ -32,6 +32,7 @@ try {
   warn("尚未登录 Cloudflare → 运行 wrangler login");
 }
 
-console.log("\n别忘了配置 4 个 Secrets（面板 → Worker 设置 → 变量与 Secrets）：");
+console.log("\n别忘了配置 4 个核心 Secrets（面板 → Worker 设置 → 变量与 Secrets）：");
 console.log("  CLIENT_ID / CLIENT_SECRET / GATE_USER / GATE_PASS");
+console.log("  可选配置：NOTIFY_URL（配置 Webhook/Bark 地址后，Token 失效将收到推送警报）");
 console.log("详见 README「后续配置」一节。");

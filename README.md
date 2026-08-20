@@ -110,8 +110,21 @@ npm run deploy
 | `CLIENT_SECRET` | Secret | 是 | Google OAuth 客户端密钥 |
 | `GATE_USER` | Secret | 是 | 代理门禁用户名（任意字符串） |
 | `GATE_PASS` | Secret | 是 | 代理门禁密码（与 Google 无关） |
+| `NOTIFY_URL` | Secret | 否 | 消息推送 Webhook 地址（Bark / Telegram / Server酱 / 自定义 Webhook） |
 | `REDIRECT` | 变量 | 否 | 覆盖回调地址（默认自动推断） |
 | `TOKENS` | KV 绑定 | 是 | 令牌存储（KV 命名空间） |
+
+## 离线巡检与失效警报推送
+
+代码内置 Worker Cron Trigger（默认**每周日 0:00 UTC** 自动触发），在后台验证 `refresh_token` 的有效性。
+
+若配置了 `NOTIFY_URL` 环境变量，当监测到 Token 失效导致同步中断时，Worker 会主动向你的手机/设备发送警报，提醒你重新访问 `/__auth`。
+
+**`NOTIFY_URL` 支持的配置格式**：
+- **Bark (iOS)**: `https://api.day.app/YOUR_KEY/{title}/{msg}`
+- **Server酱**: `https://sctapi.ftqq.com/YOUR_KEY.send?title={title}&desp={msg}`
+- **Telegram Bot**: `https://api.telegram.org/bot<TOKEN>/sendMessage?chat_id=<CHAT_ID>&text={text}`
+- **通用 Webhook**: 填入任意 Webhook 地址（如飞书 / 企微 / 钉钉），若 URL 中无 `{title}` / `{msg}` 占位符，Worker 将发送 POST 请求与 JSON 格式的 `{"title": "...", "message": "...", "text": "..."}`。
 
 ## 安全说明
 

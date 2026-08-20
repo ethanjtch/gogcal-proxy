@@ -80,6 +80,30 @@ async function refreshAccessToken(cfg, KV) {
   return refreshPromise;
 }
 
+// 消息推送助手（支持 GET 占位符 URL 或 POST Webhook）
+async function sendNotification(env, title, message) {
+  const notifyUrl = env.NOTIFY_URL;
+  if (!notifyUrl) return;
+  try {
+    const fullText = `${title}: ${message}`;
+    if (notifyUrl.includes("{title}") || notifyUrl.includes("{msg}") || notifyUrl.includes("{text}")) {
+      const url = notifyUrl
+        .replace(/{title}/g, encodeURIComponent(title))
+        .replace(/{msg}/g, encodeURIComponent(message))
+        .replace(/{text}/g, encodeURIComponent(fullText));
+      await fetch(url);
+    } else {
+      await fetch(notifyUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title, message, text: fullText }),
+      });
+    }
+  } catch (e) {
+    console.error("[gogcal] 推送消息发送异常:", e);
+  }
+}
+
 export default {
   async fetch(request, env, ctx) {
     const cfg = config(env);
@@ -307,5 +331,30 @@ export default {
     }
     out.set("access-control-allow-origin", "*");
     return new Response(resp.body, { status: resp.status, headers: out });
+  },
+
+  // ========== 7. 定时巡检：检查 OAuth Token 有效性，失效时主动推送通知 ==========
+  async scheduled(event, env, ctx) {
+    const cfg = config(env);
+    const KV = env.TOKENS;
+    if (!KV) return;
+
+    const refresh = await KV.get("refresh_token");
+    if (!refresh) {
+      console.warn("[gogcal] 定时巡检：未配置 refresh_token，跳过验证");
+      return;
+    }
+
+    const token = await refreshAccessToken(cfg, KV);
+    if (!token) {
+      console.error("[gogcal] 定时巡检：refresh_token 已失效！");
+      await sendNotification(
+        env,
+        "gogcal-proxy 警报",
+        "Google OAuth 授权已失效，日历同步已中断！请尽快访问 /__auth 重新授权。"
+      );
+    } else {
+      console.log("[gogcal] 定时巡检：Token 状态正常");
+    }
   },
 };
