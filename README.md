@@ -42,8 +42,9 @@
 gogcal-proxy/
 ├── worker.js           # Worker 代码（唯一需要部署的代码）
 ├── wrangler.toml       # 部署配置（需填入你的 KV 命名空间 ID）
-├── package.json        # npm scripts：deploy / dev / check
+├── package.json        # npm scripts：deploy / dev / test / check
 ├── scripts/check.mjs   # 部署前预检脚本
+├── tests/core.test.js  # 核心链路测试（npm test，无需网络）
 └── README.md
 ```
 
@@ -65,6 +66,7 @@ gogcal-proxy/
 git clone https://github.com/ethanjtch/gogcal-proxy.git
 cd gogcal-proxy
 npm install        # 安装 wrangler
+npm test           # 核心链路单元测试（门禁 / 路径 / Token 刷新 / 订阅白名单）
 npm run check      # 预检：KV 占位符、登录状态一键排查
 # 按下方「后续配置」完成 1-2 步后：
 npm run deploy
@@ -84,6 +86,8 @@ npm run deploy
    | `CLIENT_SECRET` | 对应的客户端密钥（加密存储，不会显示） |
    | `GATE_USER` | 你自己设置的门禁用户名（可为任意字符串，不必是邮箱） |
    | `GATE_PASS` | 你自己设置的门禁密码（建议 20+ 位随机密码，与 Google 账号无关） |
+
+   > 两个值都**不能留空**：任一为空时 Worker 会直接返回 500（失败关闭），否则空用户名密码就能绕过门禁。
 
    可选：`REDIRECT`——默认回调地址按你的域名自动推断，一般无需设置；仅当你想让回调指向别的域名时才需要。
 3. **部署 / 重新部署**：方式 A 用户无需重复；方式 B 用户 `npm run deploy`。

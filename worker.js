@@ -11,20 +11,50 @@ const UPSTREAM_HOST = "apidata.googleusercontent.com";
 
 // ---------- 工具函数 ----------
 
-// Unicode 安全的 base64 编码（btoa 仅支持 Latin-1，门禁凭据可能是任意字符）
-function base64Encode(str) {
-  const bytes = new TextEncoder().encode(str);
-  let bin = "";
-  bytes.forEach((b) => (bin += String.fromCharCode(b)));
-  return btoa(bin);
-}
-
 // 恒定时间字符串比较（避免门禁口令的时序侧信道）
 function safeEqual(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") return false;
   if (a.length !== b.length) return false;
   let diff = 0;
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return diff === 0;
+}
+
+// 解析 HTTP Basic 头：scheme 大小写不敏感、容忍客户端省略 base64 末尾的 "=" 填充、
+// 按 UTF-8 解码（门禁口令可能含中文或符号）。返回 "user:pass" 字符串或 null。
+function basicCredentials(header) {
+  const m = /^\s*basic\s+(\S+)\s*$/i.exec(header || "");
+  if (!m) return null;
+  let b64 = m[1];
+  while (b64.length % 4) b64 += "=";
+  try {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new TextDecoder().decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
+// 门禁校验结果：true 通过 / false 不通过 / "misconfigured" 表示 Secrets 缺失或为空。
+// 空口令必须直接失败：否则 "Basic " + base64(":") 会让任何人用空用户名密码通过。
+function checkGate(request, cfg) {
+  if (!cfg.GATE_USER || !cfg.GATE_PASS) return "misconfigured";
+  const decoded = basicCredentials(request.headers.get("authorization"));
+  if (decoded === null) return false;
+  return safeEqual(decoded, cfg.GATE_USER + ":" + cfg.GATE_PASS);
+}
+
+function gateMisconfiguredResponse() {
+  return new Response(
+    "配置缺失：GATE_USER / GATE_PASS 必须为两个非空字符串，否则门禁会失效。请在 Cloudflare Worker 设置中补齐 Secrets。",
+    { status: 500, headers: { "content-type": "text/plain; charset=utf-8" } }
+  );
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
 // 回调地址：优先 env.REDIRECT，否则按当前请求的域名动态推断
@@ -46,14 +76,22 @@ function config(env) {
   return cfg;
 }
 
-// 并发刷新去重：同一隔离点内多个请求同时发现 token 过期时，只向 Google 发起一次刷新
+// 并发刷新去重：同一隔离点内多个请求同时发现 token 过期时，只向 Google 发起一次刷新。
+// 失败后 30 秒内的重复请求直接返回失败，避免 refresh token 失效时把每个同步请求都变成一次 Google 调用。
 let refreshPromise = null;
+let refreshFailedAt = 0;
+const REFRESH_FAILURE_COOLDOWN = 30 * 1000;
+
 async function refreshAccessToken(cfg, KV) {
+  if (refreshFailedAt && Date.now() - refreshFailedAt < REFRESH_FAILURE_COOLDOWN) {
+    return { token: null, error: "refresh failed recently" };
+  }
   if (refreshPromise) return refreshPromise;
   refreshPromise = (async () => {
     try {
       const refresh = await KV.get("refresh_token");
-      if (!refresh) return null;
+      if (!refresh) return { token: null, error: "no refresh_token" };
+      if (!cfg.CLIENT_ID || !cfg.CLIENT_SECRET) return { token: null, error: "missing client credentials" };
       const body = new URLSearchParams({
         refresh_token: refresh,
         client_id: cfg.CLIENT_ID,
@@ -64,20 +102,109 @@ async function refreshAccessToken(cfg, KV) {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: body.toString(),
+        signal: AbortSignal.timeout(15000),
       });
-      const data = await r.json();
+      const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.access_token) {
+        refreshFailedAt = Date.now();
+        const reason = data.error_description || data.error || `HTTP ${r.status}`;
         console.error("[gogcal] Token 刷新失败: " + JSON.stringify(data));
-        return null;
+        return { token: null, error: reason };
       }
       await KV.put("access_token", data.access_token);
-      await KV.put("access_expires", String(Date.now() + (data.expires_in - 60) * 1000));
-      return data.access_token;
+      const ttl = Number(data.expires_in);
+      const ms = (Number.isFinite(ttl) && ttl > 0 ? ttl : 3600) * 1000 - 60000;
+      await KV.put("access_expires", String(Date.now() + Math.max(ms, 0)));
+      // Google 有可能轮换 refresh token，返回了就覆盖，否则下次刷新会用旧值失败
+      if (data.refresh_token) await KV.put("refresh_token", data.refresh_token);
+      refreshFailedAt = 0;
+      return { token: data.access_token, error: null };
+    } catch (e) {
+      refreshFailedAt = Date.now();
+      console.error("[gogcal] Token 刷新异常: " + (e && e.message));
+      return { token: null, error: (e && e.message) || "refresh exception" };
     } finally {
       refreshPromise = null;
     }
   })();
   return refreshPromise;
+}
+
+// 取当前可用的 access token：未过期直接复用，否则刷新
+async function currentToken(cfg, KV, { forceRefresh = false } = {}) {
+  if (!forceRefresh) {
+    const token = await KV.get("access_token");
+    const exp = Number(await KV.get("access_expires"));
+    if (token && Number.isFinite(exp) && exp > 0 && Date.now() < exp) return { token, error: null };
+  }
+  return refreshAccessToken(cfg, KV);
+}
+
+// ---------- CalDAV 路径与上游请求 ----------
+const CALDAV_V2 = "/caldav/v2";
+
+// 把客户端路径归一到 Google CalDAV 的 /caldav/v2 前缀（避免 /caldav/v2/ 被二次拼接）
+function toUpstreamPath(pathname) {
+  const p = pathname || "/";
+  if (p === "" || p === "/" || p === "/caldav" || p === "/caldav/" ||
+      p === "/.well-known/caldav" || p === "/.well-known/caldav/") {
+    return CALDAV_V2 + "/";
+  }
+  if (p === CALDAV_V2 || p.startsWith(CALDAV_V2 + "/")) return p;
+  if (p.startsWith("/caldav/")) return CALDAV_V2 + p.slice("/caldav".length);
+  return CALDAV_V2 + p;
+}
+
+// 转发到 Google CalDAV：透传请求头但剔除 Host 与 Cloudflare 注入头
+function forwardToUpstream(request, url, token, body) {
+  const headers = new Headers(request.headers);
+  for (const h of ["host", "cf-connecting-ip", "cf-ray", "cf-visitor", "cf-worker", "cf-ipcountry",
+    "cf-verification", "cdn-loop", "forwarded", "x-forwarded-for", "x-forwarded-proto", "x-real-ip",
+    "connection", "keep-alive", "transfer-encoding", "upgrade", "te", "trailer", "proxy-connection"]) {
+    headers.delete(h);
+  }
+  headers.set("Authorization", "Bearer " + token);
+  const init = { method: request.method, headers, redirect: "manual" };
+  if (body !== undefined) init.body = body;
+  return fetch(`https://${UPSTREAM_HOST}${toUpstreamPath(url.pathname)}${url.search}`, init);
+}
+
+// ---------- /subscribe 专用：Google 域名白名单 + 手动跟随重定向 ----------
+function isGoogleHost(hostname) {
+  const host = String(hostname || "").toLowerCase();
+  return host === "google.com" || host.endsWith(".google.com") || host.endsWith(".googleusercontent.com");
+}
+
+function assertGoogleUrl(u) {
+  if (u.protocol !== "https:" || u.username || u.password || (u.port && u.port !== "443") || !isGoogleHost(u.hostname)) {
+    throw new Error("redirected to a non-Google address");
+  }
+  return u;
+}
+
+// 手动跟随重定向：每一跳都重新校验白名单。
+// 不能依赖 fetch 自动跟随：Google 的跳转类端点可以指向任意外部域名，会把这个端点变成开放代理。
+async function fetchGoogleFollow(start, maxHops = 3) {
+  let target = assertGoogleUrl(start);
+  for (let hop = 0; hop <= maxHops; hop++) {
+    const r = await fetch(target.href, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(15000),
+      headers: {
+        "User-Agent": "Mozilla/5.0 (gogcal-proxy; +https://github.com/ethanjtch/gogcal-proxy)",
+        Accept: "text/calendar, text/plain;q=0.8, */*;q=0.5",
+      },
+    });
+    const isRedirect = r.status >= 300 && r.status < 400 && r.headers.get("location");
+    if (!isRedirect) return r;
+    if (hop === maxHops) {
+      await r.body?.cancel();
+      throw new Error("too many redirects");
+    }
+    await r.body?.cancel();
+    target = assertGoogleUrl(new URL(r.headers.get("location"), target));
+  }
+  throw new Error("too many redirects");
 }
 
 // 消息推送助手（支持 GET 占位符 URL 或 POST Webhook）
@@ -139,9 +266,9 @@ export default {
       // 已授权后默认上锁：必须携带门禁凭据才能重新授权，杜绝公开端点被用作 KV 写入放大器
       const hasRefresh = !!(await KV.get("refresh_token"));
       if (hasRefresh) {
-        const authHeader = request.headers.get("authorization") || "";
-        const expected = "Basic " + base64Encode(cfg.GATE_USER + ":" + cfg.GATE_PASS);
-        if (!safeEqual(authHeader, expected)) {
+        const gate = checkGate(request, cfg);
+        if (gate === "misconfigured") return gateMisconfiguredResponse();
+        if (!gate) {
           // 用 401 + WWW-Authenticate 触发浏览器 Basic 弹窗（403 不会弹）
           return new Response("此实例已完成授权。如需重新授权，请携带门禁凭据访问本入口（浏览器会弹出登录框）。", {
             status: 401,
@@ -159,7 +286,7 @@ export default {
       }
       await caches.default.put(cacheKey, new Response(String(count + 1), { headers: { "Cache-Control": "max-age=60" } }));
       const state = crypto.randomUUID();
-      await KV.put("oauth_state", state); // 防 CSRF：回调时校验
+      await KV.put("oauth_state", state, { expirationTtl: 600 }); // 防 CSRF：回调时校验，10 分钟后自动失效
       const params = new URLSearchParams({
         client_id: cfg.CLIENT_ID,
         redirect_uri: redirectUri(env, url),
@@ -207,7 +334,7 @@ export default {
         await KV.put("access_token", data.access_token);
         await KV.put("access_expires", String(Date.now() + (data.expires_in - 60) * 1000));
         return new Response(
-          `<h2 style='font-family:sans-serif'>✅ 授权成功！Token 已保存。</h2><p style='font-family:sans-serif'>现在可以在苹果设备上开始同步了（服务器地址为 ${url.host}）。</p>`,
+          `<h2 style='font-family:sans-serif'>✅ 授权成功！Token 已保存。</h2><p style='font-family:sans-serif'>现在可以在苹果设备上开始同步了（服务器地址为 ${esc(url.host)}）。</p>`,
           { headers: { "content-type": "text/html; charset=utf-8" } }
         );
       } catch (e) {
@@ -221,6 +348,18 @@ export default {
     // 只支持 /subscribe?url=<Google 公开 ICS 地址> 直传（零注册）。白名单仅放行 Google 托管域，
     // 防止端点被当作开放代理滥用；不要求门禁凭据（Apple 的订阅日历不支持认证）。
     if (url.pathname === "/subscribe" || url.pathname.startsWith("/subscribe/")) {
+      if (request.method === "OPTIONS") {
+        return new Response(null, {
+          status: 204,
+          headers: { "access-control-allow-origin": "*", "access-control-allow-methods": "GET, HEAD, OPTIONS" },
+        });
+      }
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        return new Response("此端点只支持 GET / HEAD", {
+          status: 405,
+          headers: { allow: "GET, HEAD, OPTIONS", "content-type": "text/plain; charset=utf-8" },
+        });
+      }
       const direct = url.searchParams.get("url");
       if (!direct) {
         return new Response("缺少 url 参数。用法: /subscribe?url=<Google 公开 ICS 地址>", {
@@ -234,28 +373,28 @@ export default {
       } catch {
         return new Response("url 参数不是合法地址", { status: 400, headers: { "content-type": "text/plain; charset=utf-8" } });
       }
-      const host = t.hostname.toLowerCase();
-      if (t.protocol !== "https:" || !(host === "google.com" || host.endsWith(".google.com") || host.endsWith(".googleusercontent.com"))) {
-        return new Response("仅允许 Google 域名下的公开 ICS 地址", { status: 403, headers: { "content-type": "text/plain; charset=utf-8" } });
+      if (t.protocol !== "https:" || t.username || t.password || (t.port && t.port !== "443") || !isGoogleHost(t.hostname)) {
+        return new Response("仅允许 Google 域名下的公开 ICS 地址（https，默认端口，不带凭据）", { status: 403, headers: { "content-type": "text/plain; charset=utf-8" } });
       }
       try {
-        const r = await fetch(t.href, {
-          headers: { "User-Agent": "Mozilla/5.0 (gogcal-proxy; +https://github.com/ethanjtch/gogcal-proxy)" },
-        });
+        const r = await fetchGoogleFollow(t, 3);
         const out = new Headers(r.headers);
+        // 不把上游的 set-cookie / hsts 等控制性头透给客户端
+        for (const h of ["set-cookie", "set-cookie2", "strict-transport-security", "content-security-policy",
+          "transfer-encoding", "connection", "keep-alive"]) out.delete(h);
         out.set("content-type", r.headers.get("content-type") || "text/calendar; charset=utf-8");
         out.set("access-control-allow-origin", "*");
         out.set("cache-control", "max-age=300");
         return new Response(r.body, { status: r.status, headers: out });
       } catch (e) {
-        return new Response("订阅源抓取失败: " + e.message, { status: 502 });
+        return new Response("订阅源抓取失败: " + e.message, { status: 502, headers: { "content-type": "text/plain; charset=utf-8" } });
       }
     }
 
     // ========== 3. 门禁校验（除 /__auth 与 /__callback 外所有请求） ==========
-    const authHeader = request.headers.get("authorization") || "";
-    const expected = "Basic " + base64Encode(cfg.GATE_USER + ":" + cfg.GATE_PASS);
-    if (!safeEqual(authHeader, expected)) {
+    const gate = checkGate(request, cfg);
+    if (gate === "misconfigured") return gateMisconfiguredResponse();
+    if (!gate) {
       return new Response("Unauthorized", {
         status: 401,
         headers: { "WWW-Authenticate": 'Basic realm="gogcal"', "content-type": "text/plain; charset=utf-8" },
@@ -274,56 +413,58 @@ export default {
     }
 
     // ========== 5. 获取 / 刷新 Access Token ==========
-    let token = await KV.get("access_token");
-    let exp = Number((await KV.get("access_expires")) || 0);
-    if (!token || Date.now() >= exp) {
-      token = await refreshAccessToken(cfg, KV);
-      if (!token) {
-        if (!(await KV.get("refresh_token"))) {
-          return new Response(`尚未授权：请先访问 ${url.origin}/__auth 完成一次性授权`, { status: 401 });
-        }
-        return new Response("Token 刷新失败，可能需要重新授权。请访问 " + url.origin + "/__auth", { status: 401 });
+    const bodyMethod = !["GET", "HEAD"].includes(request.method);
+    // 有 body 的请求（PROPFIND / PUT / REPORT）先缓冲：401 重试时需要重发同一个 body，流只能读一次
+    const requestBody = bodyMethod && request.body ? await request.arrayBuffer() : undefined;
+
+    const issued = await currentToken(cfg, KV);
+    if (!issued.token) {
+      if (!(await KV.get("refresh_token"))) {
+        return new Response(`尚未授权：请先访问 ${url.origin}/__auth 完成一次性授权`, { status: 401 });
       }
+      return new Response(`Token 刷新失败（${issued.error || "unknown"}），可能需要重新授权。请访问 ${url.origin}/__auth`, {
+        status: 502,
+        headers: { "content-type": "text/plain; charset=utf-8" },
+      });
     }
 
     // ========== 6. 代理到 Google CalDAV（用 Bearer Token） ==========
-    let path = url.pathname;
-    const CALDAV_V2 = "/caldav/v2";
-    if (path === "/" || path === "" || path === "/.well-known/caldav" || path === "/.well-known/caldav/" ||
-        path === "/caldav" || path === "/caldav/") {
-      path = CALDAV_V2 + "/";
-    } else if (path.startsWith(CALDAV_V2)) {
-      // 已是标准 CalDAV 路径：/caldav/v2 与 /caldav/v2/xxx 原样保留（避免双重拼接）
-    } else if (path.startsWith("/caldav/")) {
-      path = CALDAV_V2 + path.slice("/caldav".length); // /caldav/xxx -> /caldav/v2/xxx
-    } else {
-      path = CALDAV_V2 + path; // 兜底
-    }
-
-    const headers = new Headers(request.headers);
-    headers.set("Authorization", "Bearer " + token);
-    ["cf-connecting-ip", "cf-ray", "cf-visitor", "cf-worker", "cf-ipcountry", "cf-verification"].forEach(h => headers.delete(h));
-
-    const init = { method: request.method, headers, redirect: "manual" };
-    if (!["GET", "HEAD"].includes(request.method)) init.body = request.body;
-
     let resp;
     try {
-      resp = await fetch(`https://${UPSTREAM_HOST}${path}${url.search}`, init);
+      resp = await forwardToUpstream(request, url, issued.token, requestBody);
     } catch (e) {
       return new Response("Proxy error: " + e.message, { status: 502 });
     }
 
-    const out = new Headers(resp.headers);
+    // 上游判定 token 失效：清缓存、强制刷新后重试一次。
+    // 不重试的话 Apple 会直接收到 401 并提示“密码错误”，而用户什么都没改。
     if (resp.status === 401) {
-      // google 认为 token 失效：清缓存，下次请求会自动刷新
       await KV.put("access_token", "");
+      await resp.body?.cancel();
+      const retried = await currentToken(cfg, KV, { forceRefresh: true });
+      if (retried.token) {
+        try {
+          resp = await forwardToUpstream(request, url, retried.token, requestBody);
+        } catch (e) {
+          return new Response("Proxy error: " + e.message, { status: 502 });
+        }
+        if (resp.status === 401) await KV.put("access_token", "");
+      } else {
+        return new Response(`Google 授权失效（${retried.error || "unknown"}），请访问 ${url.origin}/__auth 重新授权`, {
+          status: 401,
+          headers: { "content-type": "text/plain; charset=utf-8" },
+        });
+      }
     }
-    const loc = out.get("location") || out.get("content-location");
-    if (loc) {
+
+    const out = new Headers(resp.headers);
+    // 上游下发的绝对地址（Location / Content-Location）指回自己，否则客户端会绕过代理直连 Google
+    for (const headerName of ["location", "content-location"]) {
+      const loc = out.get(headerName);
+      if (!loc) continue;
       try {
         const locUrl = new URL(loc, `https://${UPSTREAM_HOST}`);
-        if (locUrl.host === UPSTREAM_HOST) out.set("location", url.origin + locUrl.pathname + locUrl.search);
+        if (locUrl.host === UPSTREAM_HOST) out.set(headerName, url.origin + locUrl.pathname + locUrl.search);
       } catch {}
     }
     if (resp.status === 401 && !out.has("www-authenticate")) {
@@ -345,14 +486,19 @@ export default {
       return;
     }
 
-    const token = await refreshAccessToken(cfg, KV);
-    if (!token) {
-      console.error("[gogcal] 定时巡检：refresh_token 已失效！");
-      await sendNotification(
-        env,
-        "gogcal-proxy 警报",
-        "Google OAuth 授权已失效，日历同步已中断！请尽快访问 /__auth 重新授权。"
-      );
+    const result = await refreshAccessToken(cfg, KV);
+    if (!result.token) {
+      console.error("[gogcal] 定时巡检：refresh_token 已失效（" + result.error + "）");
+      // 24 小时内只告警一次，避免连续失败时反复推送
+      const last = Number(await KV.get("alert_at")) || 0;
+      if (Date.now() - last > 24 * 3600 * 1000) {
+        await KV.put("alert_at", String(Date.now()));
+        await sendNotification(
+          env,
+          "gogcal-proxy 警报",
+          "Google OAuth 授权已失效，日历同步已中断！请尽快访问 /__auth 重新授权。"
+        );
+      }
     } else {
       console.log("[gogcal] 定时巡检：Token 状态正常");
     }
