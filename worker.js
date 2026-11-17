@@ -239,7 +239,7 @@ export default {
     // ========== 0. KV 绑定缺失防御（一键部署/未配置时给出清晰指引） ==========
     if (!KV) {
       return new Response(
-        "配置缺失：请先在 Cloudflare 面板为 Worker 绑定 KV 命名空间（绑定名 TOKENS）。详见 README「后续配置」步骤 1。",
+        "配置缺失：请先在 Cloudflare 面板为 Worker 绑定 KV 命名空间（绑定名 TOKENS）。详见 README「配置」第 1 步。",
         { status: 500, headers: { "content-type": "text/plain; charset=utf-8" } }
       );
     }

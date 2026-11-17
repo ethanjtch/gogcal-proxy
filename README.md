@@ -100,6 +100,7 @@ GATE_USER=<u> GATE_PASS=<p> npm run smoke -- https://<你的域名>
 | 苹果端提示密码错误 / 401 | 核对门禁凭据与 Secrets 是否一致 |
 | 提醒事项同步报错 | 本项目不支持 Tasks，关闭该开关 |
 | `/__status` 显示无 refresh token | 访问 `/__auth` 重新授权 |
+| 一键部署后提示未绑定 KV | 官方会自动创建并绑定；若没有，手动建一个命名空间，把 ID 填进 `wrangler.toml` 两处占位符后重新部署 |
 | `*.workers.dev` 打不开 | 绑定自定义域名 |
 
 > 💰 个人用量远低于 Cloudflare 免费额度（KV 读写 / Workers 请求），长期零成本；唯一费用风险是被公开滥用——所以务必设置强门禁口令。
