@@ -17,6 +17,14 @@
 - ✅ 自动续期：access token 过期后由 Worker 用 refresh token 静默换新
 - ✅ 门禁口令（GATE_USER / GATE_PASS）与 Google 账号**完全解耦**，随意更换互不影响
 
+## 支持范围
+
+本项目只同步 **Google Calendar 的日历事件（VEVENT）**，通过 Google CalDAV 转发。
+
+**不支持 Google Tasks，也不支持 Apple「提醒事项」同步。** 即使 Google Cloud 项目里已启用 Tasks API，本项目也不会调用它：当前 OAuth scope 只有 `.../auth/calendar`，Worker 只转发 CalDAV，不访问 `tasks.googleapis.com`。
+
+苹果设备添加账户时，如果设置页出现「提醒事项」开关，请保持关闭。打开后不会同步任务，反而可能触发无效请求或错误提示。
+
 ## 工作原理
 
 ```
@@ -121,13 +129,15 @@ npm run deploy
    - 用户名：你的 `GATE_USER`
    - 密码：你的 `GATE_PASS`
    - 路径：留空或 `/caldav/v2/`；端口 443；SSL 开启
+   - 同步内容只勾选「日历」；如果系统显示「提醒事项」，保持关闭
 
 ## Google Cloud 前置（一次性，约 5 分钟）
 
 1. 在 [Google Cloud Console](https://console.cloud.google.com) 新建/选择项目，启用 **Google Calendar API** 与 **CalDAV API**。
 2. **OAuth 同意屏**：External 类型；scope 建议仅申请 `.../auth/calendar`（最小权限）。
-3. **OAuth 客户端 ID**：类型选 **Web application**；授权回调 URI 填 `https://<你的域名>/__callback`。
-4. 记下生成的 **Client ID** 与 **Client Secret**，用于上文 Secrets。
+3. **不需要启用 Google Tasks API**；即使项目里已经启用，也不会被本项目调用。
+4. **OAuth 客户端 ID**：类型选 **Web application**；授权回调 URI 填 `https://<你的域名>/__callback`。
+5. 记下生成的 **Client ID** 与 **Client Secret**，用于上文 Secrets。
 
 ## 配置参数一览
 
@@ -198,6 +208,7 @@ GATE_USER=<门禁用户名> GATE_PASS=<门禁密码> npm run smoke -- https://<�
 | 症状 | 原因 | 处理 |
 |---|---|---|
 | 苹果端一直提示密码错误 / 401 | 门禁口令不符 | 核对 GATE_USER / GATE_PASS 是否与 Secrets 一致 |
+| 「提醒事项」不出现或同步报错 | 本项目不支持 Google Tasks / VTODO | 在账户设置中关闭「提醒事项」，只同步日历 |
 | `/__status` 返回 `hasRefreshToken: false` | 未完成授权或令牌过期 | 访问 `/__auth` 重新授权 |
 | PROPFIND 返回 401 且无 multistatus | 同上 或 Secrets 缺失 | 检查 4 个 Secrets 是否都已配置 |
 | `*.workers.dev` 无法访问 | 部分网络环境可达性差异 | 绑定自有自定义域名 |

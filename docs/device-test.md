@@ -20,6 +20,8 @@
 
 ## 二、验收清单（按顺序做，每条都记结果）
 
+开始前先在账户设置里关闭「提醒事项」。本项目只同步日历事件，不处理 Google Tasks / VTODO。
+
 | # | 动作 | 期望 |
 |---|---|---|
 | 1 | 首次同步 | 日历 App 里出现 Google 的各日历和已有事件 |
@@ -47,6 +49,7 @@ cd /Users/ethanchen/Developer/gogcal-proxy
 
 | 现象 | 含义 |
 |---|---|
+| 「提醒事项」不出现或报错 | 不支持 Google Tasks / VTODO，属预期行为；保持账户的「提醒事项」关闭 |
 | 加账户时 401 | 用户名/密码错，或 `GATE_*` Secret 没生效 |
 | 能加账户但**没有日历** | principal / home-set 的 PROPFIND 失败 |
 | 能看**不能改** | PUT 被拒，多半是 ETag / `If-Match` |
