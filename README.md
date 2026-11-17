@@ -58,7 +58,7 @@ gogcal-proxy/
 └── README.md
 ```
 
-本地私有配置 `wrangler.prod.toml`（含真实 KV ID）与 `.dev.vars`（本地调试变量）已在 `.gitignore` 中忽略，不会提交。
+本地调试用的 `.dev.vars` 已在 `.gitignore` 中忽略，不会提交。
 
 ## 快速开始
 
