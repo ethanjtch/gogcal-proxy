@@ -23,7 +23,7 @@ Apple 日历 ──CalDAV(Basic 门禁)──► Cloudflare Worker ──OAuth2 
 
 点击按钮授权 GitHub 与 Cloudflare，一路确认即可（KV 已自动创建绑定、构建连接也已建好）。之后 clone 你自己的 fork 改代码，push 到 `main` 即自动重新部署。
 
-若构建连接需要手动重建，记得配构建变量 `KV_ID`（真实 Namespace ID）与构建命令 `sed -i "s/REPLACE_WITH_YOUR_KV_NAMESPACE_ID/$KV_ID/g" wrangler.toml`——仓库里只有占位符，真实 ID 不进代码。
+**这一段用不上就不用管。** Deploy 按钮会自己创建并绑定 KV，只有在你**手动**重建 Git 连接、或构建日志报「找不到 KV 命名空间」时才需要：加一个构建变量 `KV_ID`（值 = 面板 → 存储和数据库 → KV 里那个命名空间的 ID），构建命令填 `sed -i "s/REPLACE_WITH_YOUR_KV_NAMESPACE_ID/$KV_ID/g" wrangler.toml`，在构建时把占位符替换成真实 ID（真实 ID 因此不进代码）。
 
 **方式 B：CLI**
 
@@ -35,18 +35,33 @@ npm install && npm test      # 离线单元测试
 
 ## 配置（两种方式都需要）
 
-1. **KV**：方式 A 已自动绑定（绑定名 `TOKENS`）；方式 B 把 Namespace ID 填入 `wrangler.toml` 两处占位符。
-2. **Secrets**（Worker → 设置 → 变量与 Secrets）：
-
-   | 变量名 | 必填 | 说明 |
-   |---|---|---|
-   | `CLIENT_ID` / `CLIENT_SECRET` | ✅ | Google OAuth 客户端（见下节） |
-   | `GATE_USER` / `GATE_PASS` | ✅ | 门禁用户名 / 密码（任意字符串，建议 20+ 位随机，留空会 500 拒启动） |
-   | `NOTIFY_URL` | 否 | Token 失效警报推送（Bark / Server酱 / Telegram / 通用 Webhook，含 `{title}` `{msg}` 占位符或 POST JSON） |
-   | `REDIRECT` | 否 | 覆盖回调地址（默认按域名自动推断） |
-
+1. **KV 绑定**（绑定名 `TOKENS`）：方式 A 已自动创建并绑定；方式 B 把 Namespace ID 填入 `wrangler.toml` 两处占位符（`id` 与 `preview_id`）。
+2. **四个 Secrets**：部署后必须手动添加，见下方详解。
 3. **绑定自定义域名**（推荐）：`*.workers.dev` 子域在部分网络环境可能无法访问。
 4. **一次性授权**：在可访问 Google 的网络下打开 `https://<你的域名>/__auth` → 允许。
+
+### 四个 Secrets 是什么、怎么填
+
+**Deploy 按钮不会代填 Secrets**——它只负责创建 Worker 和 KV。这四个必须你自己加，**缺任何一个站点都会返回 500**（页面会直接告诉你缺哪几个，这是刻意的失败关闭设计：宁可不服务，也不无认证裸奔）。
+
+| 变量名（大小写敏感） | 来源 | 取值 |
+|---|---|---|
+| `CLIENT_ID` | Google Cloud Console | 凭据 → OAuth 客户端（Web 应用）→「客户端 ID」，形如 `1234567890-abcd.apps.googleusercontent.com` |
+| `CLIENT_SECRET` | Google Cloud Console | 同一页「客户端密钥」，形如 `GOCSPX-xxxx`；**只显示一次**，丢了点「重置密钥」 |
+| `GATE_USER` | 你自己定 | 相当于 Apple 账户里的**用户名**，任意字符串（如 `cal`），不必是邮箱 |
+| `GATE_PASS` | 你自己定 | 相当于**密码**，建议 `openssl rand -base64 24` 生成，别用你常用密码 |
+
+前两个来自 [Google Cloud 前置](#google-cloud-前置一次性)那一步创建的 OAuth 客户端；后两个与 Google 完全无关，只是苹果设备连接你这台代理时要输的账密，改它们不影响 Google 授权。
+
+**填写步骤**
+
+1. Worker → **设置** → **变量与 Secrets** → **添加**
+2. 类型选 **Secret**（不是 Text / 明文变量）
+3. 名称照上表逐字填（大小写不能变），值粘贴或生成
+4. 四个都加完后保存；面板会提示需要重新部署，点一次部署（或再 push 一次）生效
+5. 验证：`curl -i https://<你的域名>/__status` 返回 **401** 说明门禁已生效；带凭据再访问应返回 200 且 `hasRefreshToken: false`
+
+可选两个，不填不影响同步：`NOTIFY_URL`（Token 失效时推送警报，支持 Bark / Server酱 / Telegram / 通用 Webhook，可含 `{title}` `{msg}` 占位符）、`REDIRECT`（覆盖回调地址，默认按访问域名自动推断）。
 
 ## Google Cloud 前置（一次性）
 
