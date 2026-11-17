@@ -17,3 +17,4 @@ node_modules/
 
 # 私有生产配置（含个人 KV 命名空间 ID，勿提交）
 wrangler.prod.toml
+.dev.vars
