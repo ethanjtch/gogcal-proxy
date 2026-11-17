@@ -1,4 +1,4 @@
-// Google CalDAV Gateway for Cloudflare Workers (v7)
+// Google CalDAV Gateway for Cloudflare Workers
 // 借助 Cloudflare 加速 Google 日历同步：Apple 设备 -> 本 Worker（自动换 Token） -> Google
 // 敏感配置全部从 Cloudflare Worker Secrets（env）读取，请勿硬编码进代码。
 // 部署前需配置 Secrets：CLIENT_ID / CLIENT_SECRET / GATE_USER / GATE_PASS
@@ -204,7 +204,6 @@ async function fetchGoogleFollow(start, maxHops = 3) {
     await r.body?.cancel();
     target = assertGoogleUrl(new URL(r.headers.get("location"), target));
   }
-  throw new Error("too many redirects");
 }
 
 // 消息推送助手（支持 GET 占位符 URL 或 POST Webhook）
@@ -373,7 +372,9 @@ export default {
       } catch {
         return new Response("url 参数不是合法地址", { status: 400, headers: { "content-type": "text/plain; charset=utf-8" } });
       }
-      if (t.protocol !== "https:" || t.username || t.password || (t.port && t.port !== "443") || !isGoogleHost(t.hostname)) {
+      try {
+        assertGoogleUrl(t); // 与重定向跟随共用同一条白名单规则，避免两处判断漂移
+      } catch {
         return new Response("仅允许 Google 域名下的公开 ICS 地址（https，默认端口，不带凭据）", { status: 403, headers: { "content-type": "text/plain; charset=utf-8" } });
       }
       try {

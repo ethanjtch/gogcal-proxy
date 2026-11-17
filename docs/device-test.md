@@ -8,7 +8,7 @@
 
 | 字段 | 值 |
 |---|---|
-| 服务器 | `gogcal.ethanfun.dpdns.org`（不要带 `https://`、不要带路径） |
+| 服务器 | `<你的域名>`（不要带 `https://`、不要带路径） |
 | 用户名 | 你的 `GATE_USER` |
 | 密码 | 新设的 `GATE_PASS` |
 | 描述 | `gogcal` |

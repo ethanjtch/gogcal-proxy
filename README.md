@@ -40,13 +40,17 @@
 
 ```
 gogcal-proxy/
-├── worker.js           # Worker 代码（唯一需要部署的代码）
-├── wrangler.toml       # 部署配置（需填入你的 KV 命名空间 ID）
-├── package.json        # npm scripts：deploy / dev / test / check
-├── scripts/check.mjs   # 部署前预检脚本
-├── tests/core.test.js  # 核心链路测试（npm test，无需网络）
+├── worker.js              # Worker 代码（唯一需要部署的代码）
+├── wrangler.toml          # 部署配置（需填入你的 KV 命名空间 ID）
+├── package.json           # npm scripts：deploy / dev / test / check / smoke
+├── scripts/check.mjs      # 部署前预检：KV 占位符、wrangler、登录状态
+├── scripts/smoke.mjs      # 部署后冒烟：门禁 / 状态 / PROPFIND / 订阅（需门禁凭据）
+├── tests/core.test.js     # 核心链路测试（npm test，离线可跑）
+├── docs/device-test.md    # 手机真机验收清单
 └── README.md
 ```
+
+本地私有配置 `wrangler.prod.toml`（含真实 KV ID）与 `.dev.vars`（本地调试变量）已在 `.gitignore` 中忽略，不会提交。
 
 ## 快速开始
 
@@ -167,6 +171,9 @@ curl -i -X PROPFIND 'https://<你的域名>/caldav/v2/' -H 'Depth: 0' -u 'GATE_U
 
 # 授权状态：检查 refresh token 是否存在、access token 过期时间
 curl -s 'https://<你的域名>/__status' -u 'GATE_USER:GATE_PASS'
+
+# 一键冒烟：门禁 401 / 状态 200 / PROPFIND 207 / well-known 301 / 订阅白名单
+GATE_USER=<门禁用户名> GATE_PASS=<门禁密码> npm run smoke -- https://<你的域名>
 ```
 
 | 症状 | 原因 | 处理 |
