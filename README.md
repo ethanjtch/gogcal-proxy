@@ -1,237 +1,94 @@
 # gogcal-proxy
 
-**借助 Cloudflare 加速 Google 日历同步** — 面向 Apple 原生日历（iOS / macOS / iPadOS）的 CalDAV + OAuth2 网关。
+**借助 Cloudflare 加速 Google 日历同步** — 面向 Apple 原生日历的 CalDAV + OAuth2 网关，跑在 Cloudflare Workers 上。
 
-*Cloudflare-powered Google Calendar sync for Apple Calendar — a CalDAV + OAuth2 gateway running on Cloudflare Workers.*
+> ⚠️ 仅供个人学习与自用研究，不隶属于 Google 或 Cloudflare；请遵守当地法律法规及两家平台的服务条款。
 
-> ⚠️ **免责声明**：本项目仅供个人学习与自用研究，不隶属于 Google 或 Cloudflare。使用本项目即表示你自行承担全部风险；请遵守当地法律法规及 Google、Cloudflare 的服务条款，勿用于任何违规或商业化滥用场景。
+## 原理
 
----
-
-## 它解决什么问题
-
-苹果设备原生日历支持通过 CalDAV 协议同步 Google 日历。Google 的 CalDAV 服务对来自云服务器 / 数据中心 IP 的 **Basic 认证**请求有更严格的风控，常常直接拒绝。本项目把认证方式换成 Google 官方支持的 **OAuth2 授权码 + 令牌自动续期**（Bearer Token），从而让自建服务器也能稳定同步。
-
-- ✅ 苹果设备**无需安装任何 App**，原生「日历」App 直接配置
-- ✅ 令牌全部保存在**你自己的 Cloudflare KV** 中，不出现在任何日志
-- ✅ 自动续期：access token 过期后由 Worker 用 refresh token 静默换新
-- ✅ 门禁口令（GATE_USER / GATE_PASS）与 Google 账号**完全解耦**，随意更换互不影响
-
-## 支持范围
-
-本项目只同步 **Google Calendar 的日历事件（VEVENT）**，通过 Google CalDAV 转发。
-
-**不支持 Google Tasks，也不支持 Apple「提醒事项」同步。** 即使 Google Cloud 项目里已启用 Tasks API，本项目也不会调用它：当前 OAuth scope 只有 `.../auth/calendar`，Worker 只转发 CalDAV，不访问 `tasks.googleapis.com`。
-
-苹果设备添加账户时，如果设置页出现「提醒事项」开关，请保持关闭。打开后不会同步任务，反而可能触发无效请求或错误提示。
-
-## 工作原理
+Google CalDAV 对来自云服务器 IP 的 Basic 认证风控严格。本项目将认证换成 OAuth2（Bearer + 令牌自动续期），让自建服务器稳定同步：
 
 ```
-┌─────────────┐   CalDAV (Basic 门禁)   ┌──────────────────────┐   OAuth2 Bearer   ┌──────────────┐
-│ Apple 日历   │ ──────────────────────► │  gogcal-proxy Worker │ ────────────────► │ Google CalDAV │
-│ (你的设备)   │                         │  (Cloudflare Worker) │                   │  apidata.*   │
-└─────────────┘                         └──────────────────────┘                   └──────────────┘
-                                            │ 令牌存 KV，过期自动刷新
-                                            ▼
-                                      ┌──────────────┐
-                                      │  KV namespace │
-                                      └──────────────┘
+Apple 日历 ──CalDAV(Basic 门禁)──► Cloudflare Worker ──OAuth2 Bearer──► Google CalDAV
+                                        │ 令牌存 KV，过期自动刷新
 ```
 
-1. 你在苹果设备把 CalDAV 账户指向自己的域名，用户名 / 密码填你设置的 `GATE_USER` / `GATE_PASS`（仅用于给代理上锁）。
-2. Worker 校验门禁通过后，用 KV 中缓存的 access token 以 `Bearer` 方式请求 Google CalDAV。
-3. token 过期后 Worker 自动用 refresh token 换取新的，客户端无感知。
-4. 一次性授权：访问 `https://<你的域名>/__auth`，完成 Google OAuth 授权，令牌写入 KV。
-
-## 文件结构
-
-```
-gogcal-proxy/
-├── worker.js              # Worker 代码（唯一需要部署的代码）
-├── wrangler.toml          # 部署配置（需填入你的 KV 命名空间 ID）
-├── package.json           # npm scripts：deploy / dev / test / check / smoke
-├── scripts/check.mjs      # 部署前预检：KV 占位符、wrangler、登录状态
-├── scripts/smoke.mjs      # 部署后冒烟：门禁 / 状态 / PROPFIND / 订阅（需门禁凭据）
-├── tests/core.test.js     # 核心链路测试（npm test，离线可跑）
-├── docs/device-test.md    # 手机真机验收清单
-└── README.md
-```
-
-本地调试用的 `.dev.vars` 已在 `.gitignore` 中忽略，不会提交。
+- 苹果设备无需装 App，原生「日历」直接配置
+- 令牌存你自己的 KV，门禁口令与 Google 账号完全解耦
+- 只同步日历事件（VEVENT）：**不支持 Google Tasks / Apple「提醒事项」**，账户设置里该项请保持关闭
 
 ## 快速开始
 
-有两条路径，任选其一：
+**方式 A：一键部署** — [![Deploy with Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/ethanjtch/gogcal-proxy)
 
-### 方式 A：Deploy with Workers 一键部署（推荐体验）
+点击按钮授权 GitHub 与 Cloudflare，一路确认即可（KV 已自动创建绑定）。之后可到 Worker → 设置 → 构建连接你的 fork，push 到 `main` 自动重新部署（构建变量 `KV_ID` → 构建命令 `sed -i "s/REPLACE_WITH_YOUR_KV_NAMESPACE_ID/$KV_ID/g" wrangler.toml`）。
 
-[![Deploy with Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/ethanjtch/gogcal-proxy)
-
-点击上面的按钮 → 授权你的 GitHub 与 Cloudflare 账号 → 在 Cloudflare 面板中一路确认到部署完成（将部署到 `gogcal-proxy.<你的用户名>.workers.dev`）。
-
-> 一键部署会克隆仓库到你的账号，并自动创建、绑定 KV 命名空间（Worker 名与资源名都能在设置页自定义）。只有 4 个 **Secrets** 必须你自己填（见下方「后续配置」步骤 2，约 2 分钟）。
-
-### 方式 B：本地 CLI（可控性更强）
+**方式 B：CLI**
 
 ```bash
-git clone https://github.com/ethanjtch/gogcal-proxy.git
-cd gogcal-proxy
-npm install        # 安装 wrangler
-npm test           # 核心链路单元测试（门禁 / 路径 / Token 刷新 / 订阅白名单）
-npm run check      # 预检：KV 占位符、登录状态一键排查
-# 按下方「后续配置」完成 1-2 步后：
-npm run deploy
+git clone https://github.com/ethanjtch/gogcal-proxy.git && cd gogcal-proxy
+npm install && npm test      # 离线单元测试
+# 完成下方配置后：npm run deploy
 ```
 
-## 可选：push 即部署（Workers Builds）
+## 配置（两种方式都需要）
 
-「Deploy to Cloudflare」按钮本身跑的就是 Workers Builds：Cloudflare 会把仓库克隆到你的 GitHub 账号 → 自动创建并绑定 KV → 构建部署。克隆出来的仓库也是你自己的，之后 push 到 `main` 会重新构建部署。
+1. **KV**：方式 A 已自动绑定（绑定名 `TOKENS`）；方式 B 把 Namespace ID 填入 `wrangler.toml` 两处占位符。
+2. **Secrets**（Worker → 设置 → 变量与 Secrets）：
 
-若不想用按钮、想直接接自己的 fork，手动接一次即可：
+   | 变量名 | 必填 | 说明 |
+   |---|---|---|
+   | `CLIENT_ID` / `CLIENT_SECRET` | ✅ | Google OAuth 客户端（见下节） |
+   | `GATE_USER` / `GATE_PASS` | ✅ | 门禁用户名 / 密码（任意字符串，建议 20+ 位随机，留空会 500 拒启动） |
+   | `NOTIFY_URL` | 否 | Token 失效警报推送（Bark / Server酱 / Telegram / 通用 Webhook，含 `{title}` `{msg}` 占位符或 POST JSON） |
+   | `REDIRECT` | 否 | 覆盖回调地址（默认按域名自动推断） |
 
-1. 面板 → Workers & Pages → 你的 Worker → **设置 → 构建 → 连接 Git 仓库**，选 fork、分支 `main`。
-2. 构建变量加一条 `KV_ID`，值填你的 KV Namespace ID。
-3. 构建命令填：
-   ```bash
-   sed -i "s/REPLACE_WITH_YOUR_KV_NAMESPACE_ID/$KV_ID/g" wrangler.toml
-   ```
-   部署命令填 `npx wrangler deploy`。
-4. 之后 push 到 `main` 自动部署；其他分支只出预览 URL，不影响线上。
+3. **绑定自定义域名**（推荐）：`*.workers.dev` 子域在部分网络环境可能无法访问。
+4. **一次性授权**：在可访问 Google 的网络下打开 `https://<你的域名>/__auth` → 允许。
 
-> 为什么不直接把 KV ID 写进 `wrangler.toml`？因为本仓库是**模板**：占位符才能让一键部署和每份 fork 各自指向自己的 KV。ID 本身是标识符不是密钥，但写死一处，其他人的实例就会绑到同一个命名空间。所以这里用构建时注入。
->
-> Secrets 与自定义域名都在面板里，不受代码部署影响，无需重复配置。
+## Google Cloud 前置（一次性）
 
-## 后续配置（无论哪种方式都要做，都是面板「确认」操作）
+1. [Google Cloud Console](https://console.cloud.google.com) 启用 **Google Calendar API** 与 **CalDAV API**（无需 Tasks API）。
+2. OAuth 同意屏选 External，scope 仅 `.../auth/calendar`。
+3. 创建 OAuth 客户端（Web application），回调 URI 填 `https://<你的域名>/__callback`，记下 ID 与 Secret。
 
-1. **创建并绑定 KV 命名空间**：
-   - Cloudflare 面板 → Workers & Pages → KV → 创建命名空间（如 `gogcal-tokens`）。
-   - **方式 B（CLI）用户**：把 **Namespace ID** 粘贴到 `wrangler.toml` 的两处 `id`，然后 `npm run deploy`。
-   - **方式 A（按钮）用户**：KV 一般已由部署流程自动创建并绑定（绑定名 `TOKENS`，在 Worker → 设置 → 绑定 里能看到）。若日志提示未绑定，在此页手动添加：绑定名 `TOKENS` → 选你的 KV 命名空间 → 保存并部署。
-2. **配置 4 个 Secrets**：Cloudflare 面板 → Workers & Pages → `gogcal-proxy` → 设置 → 变量与 Secrets：
+## 苹果设备添加账户
 
-   | 变量名 | 值 |
-   |---|---|
-   | `CLIENT_ID` | 你的 Google OAuth 客户端 ID（见下方「Google Cloud 前置」） |
-   | `CLIENT_SECRET` | 对应的客户端密钥（加密存储，不会显示） |
-   | `GATE_USER` | 你自己设置的门禁用户名（可为任意字符串，不必是邮箱） |
-   | `GATE_PASS` | 你自己设置的门禁密码（建议 20+ 位随机密码，与 Google 账号无关） |
+设置 → 日历 → 账户 → 其他 → CalDAV：服务器 `<你的域名>`，用户名 / 密码填 `GATE_USER` / `GATE_PASS`，路径 `/caldav/v2/`，SSL 开启；只勾「日历」。
 
-   > 两个值都**不能留空**：任一为空时 Worker 会直接返回 500（失败关闭），否则空用户名密码就能绕过门禁。
+## 重新授权
 
-   可选：`REDIRECT`——默认回调地址按你的域名自动推断，一般无需设置；仅当你想让回调指向别的域名时才需要。
-3. **部署 / 重新部署**：方式 A 用户无需重复；方式 B 用户 `npm run deploy`。
-4. **绑定自有域名**（强烈推荐）：在 Worker 设置 → 域名与路由 → 添加自定义域名。*提示：`*.workers.dev` 子域在部分网络环境可能无法访问，绑定自有域名可规避。*
-5. **一次性授权**：在可访问 Google 的网络环境下打开 `https://<你的域名>/__auth` → 允许 → 看到「✅ 授权成功」。
-6. **苹果设备添加账户**：设置 → 日历 → 账户 → 添加账户 → 其他 → 添加 CalDAV 账户：
-   - 服务器：`<你的域名>`
-   - 用户名：你的 `GATE_USER`
-   - 密码：你的 `GATE_PASS`
-   - 路径：留空或 `/caldav/v2/`；端口 443；SSL 开启
-   - 同步内容只勾选「日历」；如果系统显示「提醒事项」，保持关闭
+正常同步无需操作；改密码 / 撤销授权 / 约 6 个月未用导致 token 失效时，用电脑浏览器打开 `https://<你的域名>/__auth`，弹窗输入门禁凭据即可（或 `curl -u 'user:pass' -L`）。iPhone/iPad Safari 对登录框支持不稳定，请用电脑。
 
-## Google Cloud 前置（一次性，约 5 分钟）
+> `/__auth` 在完成授权后默认上锁：无凭据访问返回 401 且零 KV 写入，无需额外防护配置。
 
-1. 在 [Google Cloud Console](https://console.cloud.google.com) 新建/选择项目，启用 **Google Calendar API** 与 **CalDAV API**。
-2. **OAuth 同意屏**：External 类型；scope 建议仅申请 `.../auth/calendar`（最小权限）。
-3. **不需要启用 Google Tasks API**；即使项目里已经启用，也不会被本项目调用。
-4. **OAuth 客户端 ID**：类型选 **Web application**；授权回调 URI 填 `https://<你的域名>/__callback`。
-5. 记下生成的 **Client ID** 与 **Client Secret**，用于上文 Secrets。
+## 订阅日历转发（可选）
 
-## 配置参数一览
+Google 网页端「按 URL 添加」的订阅日历不会出现在 CalDAV 同步里；苹果端直接订阅官方 ICS 又可能受本地网络限制。本服务提供 `/subscribe` 边缘转发，零配置：
 
-| 参数 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| `CLIENT_ID` | Secret | 是 | Google OAuth 客户端 ID |
-| `CLIENT_SECRET` | Secret | 是 | Google OAuth 客户端密钥 |
-| `GATE_USER` | Secret | 是 | 代理门禁用户名（任意字符串） |
-| `GATE_PASS` | Secret | 是 | 代理门禁密码（与 Google 无关） |
-| `NOTIFY_URL` | Secret | 否 | 消息推送 Webhook 地址（Bark / Telegram / Server酱 / 自定义 Webhook） |
-| `REDIRECT` | 变量 | 否 | 覆盖回调地址（默认自动推断） |
-| `TOKENS` | KV 绑定 | 是 | 令牌存储（KV 命名空间） |
-
-## 离线巡检与失效警报推送
-
-代码内置 Worker Cron Trigger（默认**每周日 0:00 UTC** 自动触发），在后台验证 `refresh_token` 的有效性。
-
-若配置了 `NOTIFY_URL` 环境变量，当监测到 Token 失效导致同步中断时，Worker 会主动向你的手机/设备发送警报，提醒你重新访问 `/__auth`。
-
-**`NOTIFY_URL` 支持的配置格式**：
-- **Bark (iOS)**: `https://api.day.app/YOUR_KEY/{title}/{msg}`
-- **Server酱**: `https://sctapi.ftqq.com/YOUR_KEY.send?title={title}&desp={msg}`
-- **Telegram Bot**: `https://api.telegram.org/bot<TOKEN>/sendMessage?chat_id=<CHAT_ID>&text={text}`
-- **通用 Webhook**: 填入任意 Webhook 地址（如飞书 / 企微 / 钉钉），若 URL 中无 `{title}` / `{msg}` 占位符，Worker 将发送 POST 请求与 JSON 格式的 `{"title": "...", "message": "...", "text": "..."}`。
-
-## 安全说明
-
-- 敏感配置**全部**走 Cloudflare Secrets，仓库内不存任何真实凭据。
-- 门禁口令独立于你的 Google 账号：想换就换，换完在苹果设备更新密码即可，不影响 OAuth 授权。支持任意字符（含中文/符号），建议用密码管理器生成 **20+ 位随机密码**。
-- KV 中只保存 OAuth 令牌，不保存任何日历内容；`/__status`、授权失败提示均不泄露令牌。
-- Google OAuth 客户端请使用最小 scope，并妥善保管 Client Secret（泄漏后在 Google Cloud 重置即可，无需改动本仓库）。
-- 长期未使用（约 6 个月）后 refresh token 可能失效，需重新授权（见下）。
-- 授权入口 `/__auth` 在**已完成授权后默认上锁**：无凭据访问返回 `401` 且不产生任何 KV 写入，从根上杜绝公开端点被刷写 KV 配额；同时在首次授权前的窗口期内置限速（同一 IP 60 秒最多 20 次，基于 Cache API，不消耗 KV 配额）。
-
-### 重新授权操作（改密码 / 撤销 / 长期未用后 token 失效时）
-
-正常同步期间无需操作；仅当上述场景才需要。三选一：
-
-**方式一：电脑浏览器直访（推荐）**
-1. 打开 `https://<你的域名>/__auth`
-2. 弹出登录框 → 输入 `GATE_USER` / `GATE_PASS`（就是苹果端填的那两个）
-3. 通过后自动跳转 Google 授权页 → 允许 → 看到「✅ 授权成功」
-
-> iPhone / iPad 的 Safari 对登录框支持不稳定，请用电脑浏览器操作。
-
-**方式二：Safari 钥匙串记忆（最省事）**
-1. 电脑 Safari 访问 `https://<你的域名>/__status`，弹窗输入凭据时勾选「记住密码」
-2. 以后访问 `/__auth` 会自动携带凭据，直接通过
-
-**方式三：curl（可脚本化）**
-```bash
-curl -u 'GATE_USER:GATE_PASS' -L 'https://<你的域名>/__auth'
+```
+https://<你的域名>/subscribe?url=<Google 托管域名的公开 ICS 地址>
 ```
 
-## 排查命令
+仅放行 `google.com` / `googleusercontent.com` 域名，防止被当开放代理滥用。
+
+## 排查
 
 ```bash
-# 链路自检：HTTP 207 + multistatus 即代表整条链路正常
+# 链路自检：207 + multistatus 即整链正常
 curl -i -X PROPFIND 'https://<你的域名>/caldav/v2/' -H 'Depth: 0' -u 'GATE_USER:GATE_PASS'
-
-# 授权状态：检查 refresh token 是否存在、access token 过期时间
-curl -s 'https://<你的域名>/__status' -u 'GATE_USER:GATE_PASS'
-
-# 一键冒烟：门禁 401 / 状态 200 / PROPFIND 207 / well-known 301 / 订阅白名单
-GATE_USER=<门禁用户名> GATE_PASS=<门禁密码> npm run smoke -- https://<你的域名>
+# 一键冒烟（门禁/状态/PROPFIND/301/订阅白名单）
+GATE_USER=<u> GATE_PASS=<p> npm run smoke -- https://<你的域名>
 ```
 
-| 症状 | 原因 | 处理 |
-|---|---|---|
-| 苹果端一直提示密码错误 / 401 | 门禁口令不符 | 核对 GATE_USER / GATE_PASS 是否与 Secrets 一致 |
-| 「提醒事项」不出现或同步报错 | 本项目不支持 Google Tasks / VTODO | 在账户设置中关闭「提醒事项」，只同步日历 |
-| `/__status` 返回 `hasRefreshToken: false` | 未完成授权或令牌过期 | 访问 `/__auth` 重新授权 |
-| PROPFIND 返回 401 且无 multistatus | 同上 或 Secrets 缺失 | 检查 4 个 Secrets 是否都已配置 |
-| `*.workers.dev` 无法访问 | 部分网络环境可达性差异 | 绑定自有自定义域名 |
-| 担心门禁被暴力尝试 | 公开网络上的服务都可能被扫描 | 使用高熵 `GATE_PASS`；代码内置防护：`/__auth` 授权后锁定 + Cache API 限速（无需额外面板配置） |
-| 访问 `/__auth` 弹出登录框 / 返回 401 | 已完成授权，入口已锁 | 输入门禁凭据即可（重新授权流程，见「安全说明」） |
+| 症状 | 处理 |
+|---|---|
+| 苹果端提示密码错误 / 401 | 核对门禁凭据与 Secrets 是否一致 |
+| 提醒事项同步报错 | 本项目不支持 Tasks，关闭该开关 |
+| `/__status` 显示无 refresh token | 访问 `/__auth` 重新授权 |
+| `*.workers.dev` 打不开 | 绑定自定义域名 |
 
-> 💰 **费用提示**：KV 在 Cloudflare 免费套餐中配有免费读写额度，个人日历同步用量（请求频率低、体积小）远低于限额；费用风险主要来自服务被公开滥用——所以务必设置强门禁口令。
-
-## 可选功能：订阅日历转发（Google 托管的公开 ICS）
-
-**适用场景**：你在 Google 日历网页端「按 URL 添加」的订阅日历（如 Berkeley 课程日历 `cs189-instructors@berkeley.edu`），**不会**出现在 CalDAV 账户同步中（Google CalDAV 只暴露自有/共享日历）；而苹果端直接用官方 ICS 地址订阅时，若本地网络访问 `calendar.google.com` 受限也会失败。
-
-本 Worker 提供 `/subscribe` 端点：在 **Cloudflare 边缘**抓取目标公开 ICS，再返回给苹果端「订阅日历」功能，绕开本地网络限制。**零配置、零注册**——去新增订阅日历，地址直接填：
-
-```
-https://<你的域名>/subscribe?url=https://calendar.google.com/calendar/ical/cs189-instructors%40berkeley.edu/public/basic.ics
-```
-
-把 `url` 参数换成任意一条 **Google 托管域名**（`google.com` / `googleusercontent.com`）下的公开 ICS 地址即可，无需在 KV 或代码里注册任何东西。
-
-- 为防本端点被当作开放代理滥用，**仅放行 `google.com` / `googleusercontent.com` 域名**；其他域名的 ICS 请直接在苹果端订阅原始地址（不经本代理）。
-- 若原地址中包含 `?` 或 `#`，作为参数值需要先 URL 编码（基本格式的 `basic.ics` 一般没有）。
-- 订阅日历为**只读**；同步间隔由 Apple 控制，也可下拉刷新或重启「日历」App 强制更新。
+> 💰 个人用量远低于 Cloudflare 免费额度（KV 读写 / Workers 请求），长期零成本；唯一费用风险是被公开滥用——所以务必设置强门禁口令。
 
 ## 许可证
 
