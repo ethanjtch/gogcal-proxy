@@ -76,6 +76,18 @@ npm run check      # 预检：KV 占位符、登录状态一键排查
 npm run deploy
 ```
 
+## 可选：push 即部署（Workers Builds）
+
+想让 GitHub 仓库一更新、线上 Worker 就跟着更新，用 Cloudflare 自带的 Git 集成即可，不需要自己写 CI：
+
+1. 面板 → Workers & Pages → `gogcal-proxy` → **设置 → 构建 → 连接 Git 仓库**，授权 GitHub 并选本仓库、分支 `main`。
+2. 构建命令留空（纯 JS，无依赖需要安装）；部署命令填 `npx wrangler deploy`。
+3. 之后每次 push 到 `main`，Cloudflare 自动构建并部署，历史与回滚都在面板里可查。
+
+> ⚠️ 一个前提：构建时用的是**仓库里的 `wrangler.toml`**，所以 `[[kv_namespaces]]` 的 `id` 必须是真实值，占位符会让部署出来的 Worker 绑定不到 KV。KV 命名空间 ID 只是标识符、不是密钥（没有账户凭据无法使用），写进公开仓库是安全的。
+>
+> Secrets（`CLIENT_ID` / `CLIENT_SECRET` / `GATE_USER` / `GATE_PASS`）与自定义域名都在面板里，不受代码部署影响，无需重复配置。
+
 ## 后续配置（无论哪种方式都要做，都是面板「确认」操作）
 
 1. **创建并绑定 KV 命名空间**：
