@@ -21,7 +21,9 @@ Apple 日历 ──CalDAV(Basic 门禁)──► Cloudflare Worker ──OAuth2 
 
 **方式 A：一键部署** — [![Deploy with Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/ethanjtch/gogcal-proxy)
 
-点击按钮授权 GitHub 与 Cloudflare，一路确认即可（KV 已自动创建绑定）。之后可到 Worker → 设置 → 构建连接你的 fork，push 到 `main` 自动重新部署（构建变量 `KV_ID` → 构建命令 `sed -i "s/REPLACE_WITH_YOUR_KV_NAMESPACE_ID/$KV_ID/g" wrangler.toml`）。
+点击按钮授权 GitHub 与 Cloudflare，一路确认即可（KV 已自动创建绑定、构建连接也已建好）。之后 clone 你自己的 fork 改代码，push 到 `main` 即自动重新部署。
+
+若构建连接需要手动重建，记得配构建变量 `KV_ID`（真实 Namespace ID）与构建命令 `sed -i "s/REPLACE_WITH_YOUR_KV_NAMESPACE_ID/$KV_ID/g" wrangler.toml`——仓库里只有占位符，真实 ID 不进代码。
 
 **方式 B：CLI**
 
@@ -54,7 +56,7 @@ npm install && npm test      # 离线单元测试
 
 ## 苹果设备添加账户
 
-设置 → 日历 → 账户 → 其他 → CalDAV：服务器 `<你的域名>`，用户名 / 密码填 `GATE_USER` / `GATE_PASS`，路径 `/caldav/v2/`，SSL 开启；只勾「日历」。
+设置 → 日历 → 账户 → 其他 → CalDAV：服务器 `<你的域名>`，用户名 / 密码填 `GATE_USER` / `GATE_PASS` 对应的值，路径 `/caldav/v2/`，SSL 开启；只勾「日历」。
 
 ## 重新授权
 
@@ -71,6 +73,18 @@ https://<你的域名>/subscribe?url=<Google 托管域名的公开 ICS 地址>
 ```
 
 仅放行 `google.com` / `googleusercontent.com` 域名，防止被当开放代理滥用。
+
+## 已知行为
+
+Apple 端会把每本日历显示成「共享者：<日历名>」，自建的日历也一样。原因是 Google 把每本日历当作独立 principal（`/caldav/v2/<日历ID>/user`），代理原样透传上游 XML，Apple 便按"owner ≠ 当前用户"渲染。**不影响读写，无需处理**——改它反而要跟着 Google 的数据结构走。
+
+## 文件结构
+
+```
+worker.js    全部逻辑（门禁 / OAuth / CalDAV 转发 / 订阅转发 / 定时巡检）
+tests/       离线单测，不依赖网络
+scripts/     部署前预检与部署后冒烟
+```
 
 ## 排查
 
