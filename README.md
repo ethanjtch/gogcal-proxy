@@ -62,7 +62,7 @@ gogcal-proxy/
 
 点击上面的按钮 → 授权你的 GitHub 与 Cloudflare 账号 → 在 Cloudflare 面板中一路确认到部署完成（将部署到 `gogcal-proxy.<你的用户名>.workers.dev`）。
 
-> 一键部署只完成「代码上线」。KV 命名空间与 Secrets 仍需按下方「后续配置」补齐（约 3 分钟）。
+> 一键部署会克隆仓库到你的账号，并自动创建、绑定 KV 命名空间（Worker 名与资源名都能在设置页自定义）。只有 4 个 **Secrets** 必须你自己填（见下方「后续配置」步骤 2，约 2 分钟）。
 
 ### 方式 B：本地 CLI（可控性更强）
 
@@ -78,22 +78,29 @@ npm run deploy
 
 ## 可选：push 即部署（Workers Builds）
 
-想让 GitHub 仓库一更新、线上 Worker 就跟着更新，用 Cloudflare 自带的 Git 集成即可，不需要自己写 CI：
+「Deploy to Cloudflare」按钮本身跑的就是 Workers Builds：Cloudflare 会把仓库克隆到你的 GitHub 账号 → 自动创建并绑定 KV → 构建部署。克隆出来的仓库也是你自己的，之后 push 到 `main` 会重新构建部署。
 
-1. 面板 → Workers & Pages → `gogcal-proxy` → **设置 → 构建 → 连接 Git 仓库**，授权 GitHub 并选本仓库、分支 `main`。
-2. 构建命令留空（纯 JS，无依赖需要安装）；部署命令填 `npx wrangler deploy`。
-3. 之后每次 push 到 `main`，Cloudflare 自动构建并部署，历史与回滚都在面板里可查。
+若不想用按钮、想直接接自己的 fork，手动接一次即可：
 
-> ⚠️ 一个前提：构建时用的是**仓库里的 `wrangler.toml`**，所以 `[[kv_namespaces]]` 的 `id` 必须是真实值，占位符会让部署出来的 Worker 绑定不到 KV。KV 命名空间 ID 只是标识符、不是密钥（没有账户凭据无法使用），写进公开仓库是安全的。
+1. 面板 → Workers & Pages → 你的 Worker → **设置 → 构建 → 连接 Git 仓库**，选 fork、分支 `main`。
+2. 构建变量加一条 `KV_ID`，值填你的 KV Namespace ID。
+3. 构建命令填：
+   ```bash
+   sed -i "s/REPLACE_WITH_YOUR_KV_NAMESPACE_ID/$KV_ID/g" wrangler.toml
+   ```
+   部署命令填 `npx wrangler deploy`。
+4. 之后 push 到 `main` 自动部署；其他分支只出预览 URL，不影响线上。
+
+> 为什么不直接把 KV ID 写进 `wrangler.toml`？因为本仓库是**模板**：占位符才能让一键部署和每份 fork 各自指向自己的 KV。ID 本身是标识符不是密钥，但写死一处，其他人的实例就会绑到同一个命名空间。所以这里用构建时注入。
 >
-> Secrets（`CLIENT_ID` / `CLIENT_SECRET` / `GATE_USER` / `GATE_PASS`）与自定义域名都在面板里，不受代码部署影响，无需重复配置。
+> Secrets 与自定义域名都在面板里，不受代码部署影响，无需重复配置。
 
 ## 后续配置（无论哪种方式都要做，都是面板「确认」操作）
 
 1. **创建并绑定 KV 命名空间**：
    - Cloudflare 面板 → Workers & Pages → KV → 创建命名空间（如 `gogcal-tokens`）。
    - **方式 B（CLI）用户**：把 **Namespace ID** 粘贴到 `wrangler.toml` 的两处 `id`，然后 `npm run deploy`。
-   - **方式 A（按钮）用户**：打开 Worker → 设置 → 绑定 → 添加 KV 命名空间绑定：绑定名 `TOKENS`，选择刚创建的命名空间 → 保存并重新部署（面板上点「保存并部署」）。
+   - **方式 A（按钮）用户**：KV 一般已由部署流程自动创建并绑定（绑定名 `TOKENS`，在 Worker → 设置 → 绑定 里能看到）。若日志提示未绑定，在此页手动添加：绑定名 `TOKENS` → 选你的 KV 命名空间 → 保存并部署。
 2. **配置 4 个 Secrets**：Cloudflare 面板 → Workers & Pages → `gogcal-proxy` → 设置 → 变量与 Secrets：
 
    | 变量名 | 值 |
