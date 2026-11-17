@@ -8,6 +8,7 @@
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
     "test": "node --test tests/*.test.js",
+    "smoke": "node scripts/smoke.mjs",
     "check": "node scripts/check.mjs"
   },
   "devDependencies": {
